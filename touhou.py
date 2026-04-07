@@ -20,6 +20,31 @@ STATE_PLAYING = 0
 STATE_GAMEOVER = 1
 
 
+class Starfield:
+    def __init__(self):
+        # Create 3 layers of stars: (x, y, speed, size)
+        self.stars = []
+        for _ in range(50):
+            self.stars.append([random.randint(0, WIDTH), random.randint(0, HEIGHT), 1, 1])  # Slow back
+        for _ in range(30):
+            self.stars.append([random.randint(0, WIDTH), random.randint(0, HEIGHT), 2, 2])  # Mid
+        for _ in range(15):
+            self.stars.append([random.randint(0, WIDTH), random.randint(0, HEIGHT), 4, 3])  # Fast front
+
+    def update(self):
+        for star in self.stars:
+            star[1] += star[2]  # Move Y by speed
+            if star[1] > HEIGHT:
+                star[1] = 0
+                star[0] = random.randint(0, WIDTH)
+
+    def draw(self, screen):
+        for star in self.stars:
+            # Distant stars are dimmer (gray), close stars are bright (white)
+            color = (150, 150, 150) if star[2] < 3 else WHITE
+            pygame.draw.circle(screen, color, (star[0], star[1]), star[3])
+
+
 class PlayerBullet(pygame.sprite.Sprite):
     def __init__(self, x, y):
         super().__init__()
@@ -118,21 +143,18 @@ class Enemy(pygame.sprite.Sprite):
                     b_angle = angle + (i * (2 * math.pi / 6))
                     all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, b_angle, 3, PINK))
                     bullets.add(all_sprites.sprites()[-1])
-
         elif level == 2:
             if self.timer % 45 == 0:
                 for i in range(18):
                     b_angle = (i * (2 * math.pi / 18))
                     all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, b_angle, 2.8, WHITE))
                     bullets.add(all_sprites.sprites()[-1])
-
         elif level == 3:
             if self.timer % 20 == 0:
                 for i in range(4):
                     b_angle = (i * (math.pi / 2)) + (self.timer * 0.03)
                     all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, b_angle, 4.5, RED))
                     bullets.add(all_sprites.sprites()[-1])
-
         elif level == 4:
             if self.timer % 8 == 0:
                 angle = -(self.timer * 0.12)
@@ -145,9 +167,7 @@ class Enemy(pygame.sprite.Sprite):
                 dy = player.rect.centery - self.rect.centery
                 all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, math.atan2(dy, dx), 7, GOLD))
                 bullets.add(all_sprites.sprites()[-1])
-
         elif level == 5:
-            # Pattern 5: Petal Storm
             if self.timer % 5 == 0:
                 angle1 = math.sin(self.timer * 0.05) * 1.5 + math.pi / 2
                 all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, angle1, 5, PINK))
@@ -155,9 +175,7 @@ class Enemy(pygame.sprite.Sprite):
                 angle2 = -math.sin(self.timer * 0.05) * 1.5 + math.pi / 2
                 all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, angle2, 5, RED))
                 bullets.add(all_sprites.sprites()[-1])
-
         elif level >= 6:
-            # Pattern 6: The Sun (Ultimate)
             if self.timer % 30 == 0:
                 for i in range(24):
                     b_angle = (i * (2 * math.pi / 24)) + (self.timer * 0.01)
@@ -220,6 +238,7 @@ async def main():
         all_sprites.add(p, b)
         return all_sprites, e_bullets, p_bullets, p, b, 1
 
+    starfield = Starfield()
     all_sprites, e_bullets, p_bullets, player, boss, level = reset_game()
     game_state = STATE_PLAYING
     persistent_data = load_data()
@@ -236,6 +255,7 @@ async def main():
             if event.type == pygame.MOUSEBUTTONDOWN: mouse_click = True
 
         if game_state == STATE_PLAYING:
+            starfield.update()
             player.update(keys, all_sprites, p_bullets)
             boss.update()
             boss.fire(level, player, all_sprites, e_bullets)
@@ -260,6 +280,7 @@ async def main():
                     game_state = STATE_GAMEOVER
 
         screen.fill(BLACK)
+        starfield.draw(screen)
         all_sprites.draw(screen)
         p_bullets.draw(screen)
 
