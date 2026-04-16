@@ -8,41 +8,28 @@ import asyncio
 # --- Configuration ---
 WIDTH, HEIGHT = 600, 800
 FPS = 60
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-RED = (255, 50, 50)
-BLUE = (50, 50, 255)
-PINK = (255, 100, 255)
-GOLD = (255, 215, 0)
-GREEN = (0, 255, 100)
+WHITE, BLACK = (255, 255, 255), (0, 0, 0)
+RED, BLUE = (255, 50, 50), (50, 50, 255)
+PINK, GOLD, GREEN = (255, 100, 255), (255, 215, 0), (0, 255, 100)
 
-STATE_PLAYING = 0
-STATE_GAMEOVER = 1
+STATE_PLAYING, STATE_GAMEOVER, STATE_MENU, STATE_LEVELSELECT = 0, 1, 2, 3
 
+
+# --- Classes ---
 
 class Starfield:
     def __init__(self):
-        # Create 3 layers of stars: (x, y, speed, size)
-        self.stars = []
-        for _ in range(50):
-            self.stars.append([random.randint(0, WIDTH), random.randint(0, HEIGHT), 1, 1])  # Slow back
-        for _ in range(30):
-            self.stars.append([random.randint(0, WIDTH), random.randint(0, HEIGHT), 2, 2])  # Mid
-        for _ in range(15):
-            self.stars.append([random.randint(0, WIDTH), random.randint(0, HEIGHT), 4, 3])  # Fast front
+        self.stars = [[random.randint(0, WIDTH), random.randint(0, HEIGHT), random.choice([1, 2, 4])] for _ in
+                      range(95)]
 
     def update(self):
-        for star in self.stars:
-            star[1] += star[2]  # Move Y by speed
-            if star[1] > HEIGHT:
-                star[1] = 0
-                star[0] = random.randint(0, WIDTH)
+        for s in self.stars:
+            s[1] = (s[1] + s[2]) % HEIGHT
 
     def draw(self, screen):
-        for star in self.stars:
-            # Distant stars are dimmer (gray), close stars are bright (white)
-            color = (150, 150, 150) if star[2] < 3 else WHITE
-            pygame.draw.circle(screen, color, (star[0], star[1]), star[3])
+        for s in self.stars:
+            color = (130, 130, 130) if s[2] < 3 else (200, 200, 200)
+            pygame.draw.circle(screen, color, (s[0], s[1]), s[2] // 2 + 1)
 
 
 class PlayerBullet(pygame.sprite.Sprite):
@@ -50,9 +37,8 @@ class PlayerBullet(pygame.sprite.Sprite):
         super().__init__()
         self.image = pygame.Surface((10, 24), pygame.SRCALPHA)
         pygame.draw.ellipse(self.image, (200, 255, 255), (0, 0, 10, 24))
-        pygame.draw.ellipse(self.image, WHITE, (2, 4, 6, 16))
         self.rect = self.image.get_rect(center=(x, y))
-        self.speed = 18
+        self.speed = 15
 
     def update(self):
         self.rect.y -= self.speed
@@ -64,13 +50,12 @@ class Player(pygame.sprite.Sprite):
         super().__init__()
         self.image = pygame.Surface((40, 40), pygame.SRCALPHA)
         pygame.draw.polygon(self.image, BLUE, [(20, 0), (40, 40), (20, 30), (0, 40)])
-        pygame.draw.circle(self.image, (100, 200, 255), (20, 20), 5)
         self.rect = self.image.get_rect(center=(WIDTH // 2, HEIGHT - 100))
-        self.hitbox_radius = 4
-        self.shoot_delay = 0
+        self.hitbox_radius, self.graze_radius = 4, 22
+        self.graze_count, self.shoot_delay = 0, 0
 
     def update(self, keys, all_sprites, p_bullets):
-        speed = 2.5 if keys[pygame.K_LSHIFT] else 6.5
+        speed = 2.0 if keys[pygame.K_LSHIFT] else 5.5
         if keys[pygame.K_LEFT] and self.rect.left > 0: self.rect.x -= speed
         if keys[pygame.K_RIGHT] and self.rect.right < WIDTH: self.rect.x += speed
         if keys[pygame.K_UP] and self.rect.top > 0: self.rect.y -= speed
@@ -80,26 +65,79 @@ class Player(pygame.sprite.Sprite):
             b = PlayerBullet(self.rect.centerx, self.rect.top)
             all_sprites.add(b);
             p_bullets.add(b)
-            self.shoot_delay = 4
+            self.shoot_delay = 5
         if self.shoot_delay > 0: self.shoot_delay -= 1
 
 
-class Enemy(pygame.sprite.Sprite):
-    def __init__(self):
+class Bullet(pygame.sprite.Sprite):
+    def __init__(self, x, y, angle, speed, color, size=14):
         super().__init__()
-        self.size = 80
+        self.image = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.circle(self.image, color, (size // 2, size // 2), size // 2)
+        pygame.draw.circle(self.image, WHITE, (size // 2, size // 2), size // 4)
+        self.rect = self.image.get_rect(center=(x, y))
+        self.vx, self.vy = math.cos(angle) * speed, math.sin(angle) * speed
+        self.grazed = False
+
+    def update(self):
+        self.rect.x += self.vx
+        self.rect.y += self.vy
+        if not (-100 <= self.rect.x <= WIDTH + 100 and -100 <= self.rect.y <= HEIGHT + 100):
+            self.kill()
+
+
+class Mob(pygame.sprite.Sprite):
+    def __init__(self, x, y, path_type):
+        super().__init__()
+        self.image = pygame.Surface((30, 30), pygame.SRCALPHA)
+        # Unique look for small mobs: segmented cyan circle
+        pygame.draw.circle(self.image, (0, 255, 255), (15, 15), 15, 4)
+        pygame.draw.rect(self.image, BLACK, (13, 0, 4, 30))  # Vertical segment
+        pygame.draw.rect(self.image, BLACK, (0, 13, 30, 4))  # Horizontal segment
+
+        self.rect = self.image.get_rect(center=(x, y))
+        self.hp = 8
+        self.timer = 0
+        self.path_type = path_type
+
+    def update(self):
+        self.timer += 1
+        if self.path_type == "sin":
+            self.rect.x += 2.5
+            self.rect.y = 120 + math.sin(self.timer * 0.04) * 60
+        elif self.path_type == "dive":
+            self.rect.y += 3.5
+
+        if self.rect.top > HEIGHT or self.rect.left > WIDTH or self.rect.right < 0: self.kill()
+
+
+class Enemy(pygame.sprite.Sprite):
+    def __init__(self, is_boss=True):
+        super().__init__()
+        self.is_boss = is_boss
+        self.size = 80 if is_boss else 40
         self.base_image = pygame.Surface((self.size, self.size), pygame.SRCALPHA)
-        pygame.draw.circle(self.base_image, (150, 0, 0), (40, 40), 40)
-        pygame.draw.circle(self.base_image, RED, (40, 40), 30, 5)
-        pygame.draw.rect(self.base_image, GOLD, (20, 35, 40, 10))
+
+        # --- RESTORED BOSS VISUAL DESIGN ---
+        if is_boss:
+            # Dark red base/center
+            pygame.draw.circle(self.base_image, (150, 0, 0), (40, 40), 40)
+            # Bright red outer rings
+            pygame.draw.circle(self.base_image, RED, (40, 40), 30, 5)
+            # Gold horizontal bar
+            pygame.draw.rect(self.base_image, GOLD, (20, 35, 40, 10))
+        else:
+            # Small enemy look (different from mobs)
+            pygame.draw.circle(self.base_image, (200, 100, 0), (20, 20), 20)
+            pygame.draw.circle(self.base_image, GOLD, (20, 20), 10, 3)
+
         self.image = self.base_image.copy()
         self.rect = self.image.get_rect(center=(WIDTH // 2, 150))
         self.hp = 150
         self.max_hp = 150
         self.timer = 0
-        self.flash_timer = 0
-        self.shake_offset = (0, 0)
         self.invuln_timer = 0
+        self.flash_timer = 0
 
     def take_damage(self, amt):
         if self.invuln_timer <= 0:
@@ -112,107 +150,92 @@ class Enemy(pygame.sprite.Sprite):
         self.timer += 1
         if self.invuln_timer > 0: self.invuln_timer -= 1
 
-        base_x = (WIDTH // 2) + math.sin(self.timer * 0.02) * 150
-        base_y = 150 + math.cos(self.timer * 0.03) * 30
+        if self.is_boss:
+            bx = (WIDTH // 2) + math.sin(self.timer * 0.02) * 150
+            by = 150 + math.cos(self.timer * 0.03) * 40
+            self.rect.center = (bx, by)
 
         if self.flash_timer > 0:
             self.flash_timer -= 1
-            self.image = self.base_image.copy()
             self.image.fill(WHITE, special_flags=pygame.BLEND_RGB_ADD)
-            self.shake_offset = (random.randint(-5, 5), random.randint(-5, 5))
-        elif self.invuln_timer > 0:
-            self.image = self.base_image.copy()
-            if (self.timer // 4) % 2 == 0:
-                self.image.set_alpha(100)
-            else:
-                self.image.set_alpha(255)
         else:
-            self.image = self.base_image
-            self.image.set_alpha(255)
-            self.shake_offset = (0, 0)
-
-        self.rect.center = (base_x + self.shake_offset[0], base_y + self.shake_offset[1])
+            self.image = self.base_image.copy()
+            if self.invuln_timer > 0: self.image.set_alpha(120)
 
     def fire(self, level, player, all_sprites, bullets):
         if self.invuln_timer > 0: return
+        t = self.timer
+        cx, cy = self.rect.center
 
         if level == 1:
-            if self.timer % 12 == 0:
-                angle = (self.timer * 0.08)
+            if t % 20 == 0:
                 for i in range(6):
-                    b_angle = angle + (i * (2 * math.pi / 6))
-                    all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, b_angle, 3, PINK))
-                    bullets.add(all_sprites.sprites()[-1])
+                    b = Bullet(cx, cy, (t * 0.08) + (i * math.pi / 3), 3, PINK)
+                    all_sprites.add(b);
+                    bullets.add(b)
         elif level == 2:
-            if self.timer % 45 == 0:
-                for i in range(18):
-                    b_angle = (i * (2 * math.pi / 18))
-                    all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, b_angle, 2.8, WHITE))
-                    bullets.add(all_sprites.sprites()[-1])
+            if t % 50 == 0:
+                for i in range(16):
+                    b = Bullet(cx, cy, i * math.pi / 8, 2.5, WHITE)
+                    all_sprites.add(b);
+                    bullets.add(b)
         elif level == 3:
-            if self.timer % 20 == 0:
-                for i in range(4):
-                    b_angle = (i * (math.pi / 2)) + (self.timer * 0.03)
-                    all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, b_angle, 4.5, RED))
-                    bullets.add(all_sprites.sprites()[-1])
+            if t % 12 == 0:
+                off = math.sin(t * 0.04) * 0.8
+                for a in [math.pi / 2 + off, math.pi / 2 - off]:
+                    b = Bullet(cx, cy, a, 4.5, RED)
+                    all_sprites.add(b);
+                    bullets.add(b)
         elif level == 4:
-            if self.timer % 8 == 0:
-                angle = -(self.timer * 0.12)
+            if t % 15 == 0:
                 for i in range(4):
-                    b_angle = angle + (i * (2 * math.pi / 4))
-                    all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, b_angle, 4, PINK))
-                    bullets.add(all_sprites.sprites()[-1])
-            if self.timer % 60 == 0:
-                dx = player.rect.centerx - self.rect.centerx
-                dy = player.rect.centery - self.rect.centery
-                all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, math.atan2(dy, dx), 7, GOLD))
-                bullets.add(all_sprites.sprites()[-1])
+                    b = Bullet(cx, cy, (t * -0.08) + (i * math.pi / 2), 3.5, GOLD)
+                    all_sprites.add(b);
+                    bullets.add(b)
         elif level == 5:
-            if self.timer % 5 == 0:
-                angle1 = math.sin(self.timer * 0.05) * 1.5 + math.pi / 2
-                all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, angle1, 5, PINK))
-                bullets.add(all_sprites.sprites()[-1])
-                angle2 = -math.sin(self.timer * 0.05) * 1.5 + math.pi / 2
-                all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, angle2, 5, RED))
-                bullets.add(all_sprites.sprites()[-1])
-        elif level >= 6:
-            if self.timer % 30 == 0:
-                for i in range(24):
-                    b_angle = (i * (2 * math.pi / 24)) + (self.timer * 0.01)
-                    all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, b_angle, 2, GOLD))
-                    bullets.add(all_sprites.sprites()[-1])
-            if self.timer % 40 == 0:
-                dx = player.rect.centerx - self.rect.centerx
-                dy = player.rect.centery - self.rect.centery
-                all_sprites.add(Bullet(self.rect.centerx, self.rect.centery, math.atan2(dy, dx), 9, WHITE))
-                bullets.add(all_sprites.sprites()[-1])
+            if t % 25 == 0:
+                for i in range(10):
+                    b = Bullet(cx, cy, i * math.pi / 5 + t * 0.02, 2.5 + math.sin(i), BLUE)
+                    all_sprites.add(b);
+                    bullets.add(b)
+        elif level == 6:
+            if t % 6 == 0:
+                b = Bullet(cx, cy, t * 0.12, 3.2, WHITE)
+                all_sprites.add(b);
+                bullets.add(b)
+        elif level == 7:  # Gravity Linger
+            if t % 40 == 0:
+                for i in range(18):
+                    b = Bullet(cx, cy, i * math.pi / 9, 1.2 + (i % 2), GOLD)
+                    all_sprites.add(b);
+                    bullets.add(b)
+        elif level == 8:  # Geometry
+            if t % 30 == 0:
+                for i in range(4):
+                    for j in range(4):
+                        ang = (i * math.pi / 2) + (j * 0.15)
+                        b = Bullet(cx, cy, ang, 3.8, GREEN)
+                        all_sprites.add(b);
+                        bullets.add(b)
+        elif level == 9:  # Homing Bubbles
+            if t % 80 == 0:
+                dx, dy = player.rect.centerx - cx, player.rect.centery - cy
+                b = Bullet(cx, cy, math.atan2(dy, dx), 1.8, PINK, 28)
+                all_sprites.add(b);
+                bullets.add(b)
+        elif level >= 10:  # Final Curtain
+            if t % 7 == 0:
+                b1 = Bullet(cx, cy, t * 0.09, 3.5, RED)
+                b2 = Bullet(cx, cy, -t * 0.09, 3.5, BLUE)
+                all_sprites.add(b1, b2);
+                bullets.add(b1, b2)
 
 
-class Bullet(pygame.sprite.Sprite):
-    def __init__(self, x, y, angle, speed, color):
-        super().__init__()
-        self.image = pygame.Surface((14, 14), pygame.SRCALPHA)
-        pygame.draw.circle(self.image, color, (7, 7), 7)
-        pygame.draw.circle(self.image, WHITE, (7, 7), 3)
-        self.rect = self.image.get_rect(center=(x, y))
-        self.vx = math.cos(angle) * speed
-        self.vy = math.sin(angle) * speed
-
-    def update(self):
-        self.rect.x += self.vx
-        self.rect.y += self.vy
-        if not (-50 <= self.rect.x <= WIDTH + 50 and -50 <= self.rect.y <= HEIGHT + 50):
-            self.kill()
-
-
+# --- Data Handling ---
 def load_data():
     if os.path.exists("save.json"):
-        try:
-            with open("save.json", "r") as f:
-                return json.load(f)
-        except:
-            pass
-    return {"max_phase": 1}
+        with open("save.json", "r") as f: return json.load(f)
+    return {"max_phase": 1, "test_mode": False}
 
 
 def save_data(phase):
@@ -222,103 +245,145 @@ def save_data(phase):
         with open("save.json", "w") as f: json.dump(data, f)
 
 
+# --- Main Game ---
+
 async def main():
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     clock = pygame.time.Clock()
-    font_sub = pygame.font.SysFont("monospace", 20)
-    font_main = pygame.font.SysFont("Arial", 48, bold=True)
+    f_sub, f_btn, f_main = pygame.font.SysFont("monospace", 18), pygame.font.SysFont("monospace", 22,
+                                                                                     True), pygame.font.SysFont("Arial",
+                                                                                                                48,
+                                                                                                                True)
 
-    def reset_game():
-        all_sprites = pygame.sprite.Group()
-        e_bullets = pygame.sprite.Group()
-        p_bullets = pygame.sprite.Group()
-        p = Player()
-        b = Enemy()
-        all_sprites.add(p, b)
-        return all_sprites, e_bullets, p_bullets, p, b, 1
+    def reset_game(lvl=1):
+        all_sprites, e_bullets, p_bullets, enemies = pygame.sprite.Group(), pygame.sprite.Group(), pygame.sprite.Group(), pygame.sprite.Group()
+        p = Player();
+        b = Enemy(True)
+        b.hp = 150 + (lvl * 70);
+        b.max_hp = b.hp
+        all_sprites.add(p, b);
+        enemies.add(b)
+        return all_sprites, e_bullets, p_bullets, enemies, p, b, lvl
 
     starfield = Starfield()
-    all_sprites, e_bullets, p_bullets, player, boss, level = reset_game()
-    game_state = STATE_PLAYING
-    persistent_data = load_data()
+    all_sprites, e_bullets, p_bullets, enemies, player, boss, level = reset_game()
+    game_state, persistent_data = STATE_MENU, load_data()
 
-    running = True
-    while running:
-        clock.tick(FPS)
-        keys = pygame.key.get_pressed()
-        mouse_pos = pygame.mouse.get_pos()
-        mouse_click = False
+    while True:
+        # DT calculation and FPS capping
+        # dt = clock.tick(FPS)
 
+        mouse_pos, mouse_click = pygame.mouse.get_pos(), False
         for event in pygame.event.get():
-            if event.type == pygame.QUIT: running = False
+            if event.type == pygame.QUIT: pygame.quit(); return
             if event.type == pygame.MOUSEBUTTONDOWN: mouse_click = True
 
-        if game_state == STATE_PLAYING:
-            starfield.update()
+        keys = pygame.key.get_pressed()
+
+        if game_state == STATE_MENU:
+            screen.fill(BLACK);
+            starfield.update();
+            starfield.draw(screen)
+            txt = f_main.render("SHRINE MAIDEN", True, WHITE)
+            screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, 150))
+
+            p_rect, l_rect = pygame.Rect(WIDTH // 2 - 100, 300, 200, 50), pygame.Rect(WIDTH // 2 - 100, 370, 200, 50)
+
+            for r, t, s in [(p_rect, "PLAY", STATE_PLAYING), (l_rect, "LEVELS", STATE_LEVELSELECT)]:
+                hover = r.collidepoint(mouse_pos)
+                pygame.draw.rect(screen, (0, 150, 0) if hover else (0, 80, 0), r, border_radius=8)
+                msg = f_btn.render(t, True, WHITE)
+                screen.blit(msg, (r.centerx - msg.get_width() // 2, r.centery - msg.get_height() // 2))
+                if hover and mouse_click:
+                    if s == STATE_PLAYING:
+                        all_sprites, e_bullets, p_bullets, enemies, player, boss, level = reset_game(1)
+                    game_state = s
+
+        elif game_state == STATE_LEVELSELECT:
+            screen.fill(BLACK);
+            starfield.draw(screen)
+            persistent_data = load_data()
+            max_p = 10 if persistent_data.get("test_mode") else persistent_data["max_phase"]
+
+            for i in range(1, max_p + 1):
+                r = pygame.Rect(WIDTH // 2 - 140 + ((i - 1) % 3) * 100, 200 + ((i - 1) // 3) * 60, 80, 40)
+                hover = r.collidepoint(mouse_pos)
+                pygame.draw.rect(screen, (100, 100, 100) if hover else (50, 50, 50), r)
+                screen.blit(f_sub.render(f"P{i}", True, WHITE), (r.centerx - 10, r.centery - 10))
+                if hover and mouse_click:
+                    all_sprites, e_bullets, p_bullets, enemies, player, boss, level = reset_game(i)
+                    game_state = STATE_PLAYING
+
+            b_rect = pygame.Rect(WIDTH // 2 - 50, HEIGHT - 100, 100, 40)
+            if b_rect.collidepoint(mouse_pos) and mouse_click: game_state = STATE_MENU
+            pygame.draw.rect(screen, RED, b_rect);
+            screen.blit(f_sub.render("BACK", True, WHITE), (b_rect.x + 25, b_rect.y + 10))
+
+        elif game_state == STATE_PLAYING:
+            starfield.update();
             player.update(keys, all_sprites, p_bullets)
-            boss.update()
-            boss.fire(level, player, all_sprites, e_bullets)
-            p_bullets.update()
+
+            # Managed mob spawning
+            if level > 3 and random.random() < 0.008:
+                side = random.choice([-50, WIDTH + 50])
+                m = Mob(side, 120, "sin" if side < 0 else "dive")
+                all_sprites.add(m);
+                enemies.add(m)
+
+            for e in enemies:
+                e.update()
+                if hasattr(e, 'fire'): e.fire(level, player, all_sprites, e_bullets)
+
+            p_bullets.update();
             e_bullets.update()
 
-            hits = pygame.sprite.spritecollide(boss, p_bullets, True)
-            for hit in hits:
-                if boss.take_damage(2):
-                    if boss.hp <= 0:
-                        level += 1
-                        save_data(level)
-                        persistent_data = load_data()
-                        boss.invuln_timer = 100
-                        boss.hp = 150 + (level * 60)
-                        boss.max_hp = boss.hp
-                        for b in e_bullets: b.kill()
+            # Collisions
+            for p_b in p_bullets:
+                hits = pygame.sprite.spritecollide(p_b, enemies, False)
+                for e in hits:
+                    p_b.kill()
+                    if e.take_damage(2) and e.hp <= 0:
+                        if e == boss:
+                            level += 1;
+                            save_data(level)
+                            boss.invuln_timer = 120
+                            boss.hp = 150 + (level * 70);
+                            boss.max_hp = boss.hp
+                            for bullet in e_bullets: bullet.kill()
+                        else:
+                            e.kill()
 
             for b in e_bullets:
-                dist = math.hypot(player.rect.centerx - b.rect.centerx, player.rect.centery - b.rect.centery)
-                if dist < player.hitbox_radius + 4:
+                d = math.hypot(player.rect.centerx - b.rect.centerx, player.rect.centery - b.rect.centery)
+                if d < player.hitbox_radius + 4:
                     game_state = STATE_GAMEOVER
+                elif d < player.graze_radius and not b.grazed:
+                    player.graze_count += 1;
+                    b.grazed = True
 
-        screen.fill(BLACK)
-        starfield.draw(screen)
-        all_sprites.draw(screen)
-        p_bullets.draw(screen)
+            screen.fill(BLACK);
+            starfield.draw(screen);
+            all_sprites.draw(screen)
 
-        # UI
-        pygame.draw.rect(screen, (50, 50, 50), (100, 20, 400, 15))
-        pygame.draw.rect(screen, GREEN, (100, 20, 400 * (max(0, boss.hp) / boss.max_hp), 15))
-        pygame.draw.rect(screen, WHITE, (100, 20, 400, 15), 2)
+            # Boss HP bar UI
+            pygame.draw.rect(screen, (40, 40, 40), (100, 20, 400, 15))
+            pygame.draw.rect(screen, GREEN, (100, 20, 400 * (max(0, boss.hp) / boss.max_hp), 15))
+            screen.blit(f_sub.render(f"PHASE {level} | GRAZE {player.graze_count}", True, PINK), (100, 40))
+            if keys[pygame.K_LSHIFT]:
+                pygame.draw.circle(screen, WHITE, player.rect.center, 10, 1)
+                pygame.draw.circle(screen, RED, player.rect.center, 3)
 
-        txt_level = font_sub.render(f"PHASE: {level}", True, WHITE)
-        txt_best = font_sub.render(f"MAX PHASE: {persistent_data['max_phase']}", True, GOLD)
-        screen.blit(txt_level, (100, 40))
-        screen.blit(txt_best, (100, 65))
-
-        if keys[pygame.K_LSHIFT] and game_state == STATE_PLAYING:
-            pygame.draw.circle(screen, WHITE, player.rect.center, 10, 1)
-            pygame.draw.circle(screen, RED, player.rect.center, 3)
-
-        if game_state == STATE_GAMEOVER:
-            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        elif game_state == STATE_GAMEOVER:
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA);
             overlay.fill((0, 0, 0, 180))
             screen.blit(overlay, (0, 0))
-            msg = font_main.render("MISSION FAILED", True, RED)
-            screen.blit(msg, (WIDTH // 2 - msg.get_width() // 2, HEIGHT // 2 - 100))
-            btn_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2, 200, 50)
-            btn_color = (150, 150, 150) if btn_rect.collidepoint(mouse_pos) else (100, 100, 100)
-            if btn_rect.collidepoint(mouse_pos) and mouse_click:
-                all_sprites, e_bullets, p_bullets, player, boss, level = reset_game()
-                game_state = STATE_PLAYING
-            pygame.draw.rect(screen, btn_color, btn_rect, border_radius=10)
-            pygame.draw.rect(screen, WHITE, btn_rect, 2, border_radius=10)
-            btn_txt = font_sub.render("RETRY", True, WHITE)
-            screen.blit(btn_txt,
-                        (btn_rect.centerx - btn_txt.get_width() // 2, btn_rect.centery - btn_txt.get_height() // 2))
+            txt = f_main.render("MISSION FAILED", True, RED)
+            screen.blit(txt, (WIDTH // 2 - txt.get_width() // 2, HEIGHT // 2 - 50))
+            if mouse_click: game_state = STATE_MENU
 
         pygame.display.flip()
-        await asyncio.sleep(0)
-
-    pygame.quit()
+        await asyncio.sleep(0.01)
 
 
 if __name__ == "__main__":
